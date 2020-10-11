@@ -4,35 +4,32 @@
 
 // global variables
 std::stack<Query> queryStack;			// 保存运算结果的 stack
-std::stack<char> operatorStack;			// 保存运算符号的 stack
+std::stack<std::string> operatorStack;	// 保存运算符号的 stack
+std::vector<std::string> opers;			// 保存查询语句
 
 // 三个运算
-void runQuery(char);
+void runQuery(const std::string&);
 void andQuery();
 void notQuery();
 void orQuery();
 
-Query inputAndRun();					// 读入查询语句，返回查询结果
-void runQueries(std::ifstream&);		// 处理与用户的交互
+void runQueries(std::ifstream&);	// 处理与用户的交互
+void input();						// 将输入查询语句分割，按顺序保存到 opers 中
+Query run();						// 查询主程序
 
 int main(int argc, char* argv[])
 {
-	// 读入文件，处理错误输入
 	if (argc < 2)
 	{
 		std::cout << "error: No file name arg.";
 		return 0;
 	}
-
 	auto file = std::ifstream(argv[1]);
-
 	if (file.fail())
 	{
-		std::cout << "error: Open file " << argv[1] << " fail.";
+		std::cout << "error: Open file " << argv[1] << " failed.";
 		return 0;
 	}
-
-	// 运行查询程序
 	runQueries(file);
 }
 
@@ -43,45 +40,66 @@ void runQueries(std::ifstream& infile)
 	// 与用户交互：提示用户输入查询的语句，完成查询并打印结果
 	while (true) {
 		std::cout << "Please put brackets and executing Query for:";
-		Query q = inputAndRun();
-		print(std::cout, q.eval(tq)) << std::endl;
+		input();
+		try {
+			auto q = run();
+			print(std::cout, q.eval(tq)) << std::endl;
+		}
+		catch (...)
+		{
+			std::cout << "statement error diagnosis!" << std::endl;
+		}
+
+		// 下一次输入前，清空查询语句
+		opers.clear();
 	}
 }
 
-Query inputAndRun()
+void input()
 {
 	char c;									// 读入的单个字符
 	std::string word;						// 由 c 合成的单词
-	char oper;								// 运算符
 
 	while (std::cin >> std::noskipws >> c) {
 		if (c == '\n') break;
-		if (isalpha(c))
-			word.push_back(c);	// 单个字母加入到 word 中，然后继续读取
-		else if (c == '(' || c == '&' || c == '|' || c == '~') {	// 这些运算符统统入 operatorstack
+		if (isalpha(c)) word.push_back(c);	// 单个字母加入到 word 中，然后继续读取
+		else if (c == '(' || c == ')' || c == '&' || c == '|' || c == '~') {
 			if (!word.empty())
-			{// 将前一个单词的查询结果 wordquery 入 querystack
-				queryStack.push(Query(word));
+			{// 将前一个单词入 opers
+				opers.push_back(word);
 				word = "";			// 重置 word
 			}
-			operatorStack.push(c);	// 此 运算符 入 operatorstack
+			opers.push_back(std::string(1, c));
 		}
-		else if (c == ')') { // 开始运算
-			// !!! 这儿之前 word 不能遗漏
-			if (!word.empty())
-			{// 将前一个单词的查询结果 wordquery 入 querystack
-				queryStack.push(Query(word));
-				word = "";			// 重置 word
-			}
+	}
+	if (!word.empty())	// 最后一个单词存在
+		opers.push_back(word);
+}
+
+Query run()
+{
+	std::string word;
+	std::string oper;
+
+	// 反向处理查询语句中的单词和运算符（从右往左）
+	for (auto i = opers.crbegin(); i != opers.crend(); ++i)
+	{
+		if (*i == ")" || *i == "&" || *i == "|")	// 这些运算符统统入 operatorstack
+			operatorStack.push(*i);
+		else if (*i == "~")		//遇到 ~ 时，运算query已在queryStack中，可直接运算
+			runQuery("~");
+		else if (*i == "(") { // 开始运算
+			if(operatorStack.empty())
+				throw std::invalid_argument("statement error diagnosis.");
 			oper = operatorStack.top();
 			operatorStack.pop();
 			runQuery(oper);
 		}
+		else
+			queryStack.push(*i);
 	}
 
-	if (!word.empty())
-		queryStack.push(Query(word));
-
+	// 处理可能剩余的运算符
 	while (!operatorStack.empty()) {
 		oper = operatorStack.top();
 		operatorStack.pop();
@@ -91,37 +109,46 @@ Query inputAndRun()
 	return queryStack.top();
 }
 
-void runQuery(char oper)
+void runQuery(const std::string& oper)
 {
-	if (oper == '(')		// '(' 直接略去
+	if (oper == ")")		// ")" 直接略去
 		return;
-	else if (oper == '~')
+	else if (oper == "~")
 		notQuery();
-	else if (oper == '|')
+	else if (oper == "|")
 		orQuery();
-	else if (oper == '&')
+	else if (oper == "&")
 		andQuery();
 }
 void notQuery()
 {// 从 queryStack 弹出 query ，进行 ~ 运算后，结果入栈
+	if (queryStack.empty())
+		throw std::invalid_argument("statement error diagnosis.");
+
 	Query q = queryStack.top();
 	queryStack.pop();
 	queryStack.push(~q);
 }
 void andQuery()
 {// 从 queryStack 弹出 query ，进行 & 运算后，结果入栈
-	Query b = queryStack.top();
-	queryStack.pop();
+	if (queryStack.size() < 2)
+		throw std::invalid_argument("statement error diagnosis.");
+
 	Query a = queryStack.top();
+	queryStack.pop();
+	Query b = queryStack.top();
 	queryStack.pop();
 
 	queryStack.push(a & b);
 }
 void orQuery()
 {// 从 queryStack 弹出 query ，进行 | 运算后，结果入栈
-	Query b = queryStack.top();
-	queryStack.pop();
+	if (queryStack.size() < 2)
+		throw std::invalid_argument("statement error diagnosis.");
+
 	Query a = queryStack.top();
+	queryStack.pop();
+	Query b = queryStack.top();
 	queryStack.pop();
 
 	queryStack.push(a | b);
